@@ -84,9 +84,17 @@ def load_images(root: str) -> List[Tuple[str, torch.Tensor, Optional[int], Optio
 
 
 def fgsm_attack(image: torch.Tensor, epsilon: float, data_grad: torch.Tensor) -> torch.Tensor:
-    """FGSM攻击：按梯度符号扰动图像并裁剪到[0,1]"""
+    """FGSM攻击：按梯度符号扰动图像，并使用掩膜过滤背景噪点"""
     sign_data_grad = data_grad.sign()
-    perturbed_image = image + epsilon * sign_data_grad
+    
+    # 生成掩膜：仅保留非背景像素（假设背景为纯黑0）
+    # 使用一个小阈值（如0.01）避免浮点误差
+    mask = (image > 0.01).float()
+    
+    # 应用掩膜：仅在前景区域施加扰动
+    masked_perturbation = epsilon * sign_data_grad * mask
+    
+    perturbed_image = image + masked_perturbation
     perturbed_image = torch.clamp(perturbed_image, 0, 1)
     return perturbed_image
 

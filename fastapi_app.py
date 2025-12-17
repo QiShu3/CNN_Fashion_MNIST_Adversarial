@@ -22,6 +22,16 @@ import sys
 
 app = FastAPI(title="FGSM Attack Service", version="0.1.0")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.mount("/web", StaticFiles(directory="web"), name="web")
+
 
 def tensor_to_base64_png(t: torch.Tensor) -> str:
     """将单通道张量转换为PNG的Base64字符串"""
