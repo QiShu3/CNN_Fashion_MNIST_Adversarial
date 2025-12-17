@@ -19,17 +19,21 @@ from itertools import product
 torch.set_grad_enabled(True)
 
 class Network(nn.Module):
+    """卷积神经网络：用于Fashion-MNIST分类
+
+    包含两层卷积+池化，以及三层全连接输出10类。
+    """
     def __init__(self):
         super(Network, self).__init__()
         self.conv1 = nn.Conv2d(in_channels=1, out_channels=6, kernel_size=5)
         self.conv2 = nn.Conv2d(in_channels=6, out_channels=12, kernel_size=5)
-        #dropout example
         #self.conv2_drop = nn.Dropout2d()
         self.fc1 = nn.Linear(in_features=12*4*4, out_features=120)
         self.fc2 = nn.Linear(in_features=120, out_features=60)
         self.out = nn.Linear(in_features=60, out_features=10)
         
     def forward(self, t):
+        """前向传播：返回未归一化的类别logits"""
         t = F.relu(self.conv1(t))
         t = F.max_pool2d(t, kernel_size=2, stride=2)
 
@@ -42,6 +46,7 @@ class Network(nn.Module):
         return t
 
 def get_num_correct(preds, labels):
+    """统计预测正确的样本数量"""
     return preds.argmax(dim=1).eq(labels).sum().item()
 
 transform = transforms.ToTensor()
@@ -77,8 +82,8 @@ for lr, batch_size in product(*param_values):
         for batch in train_loader: #Get Batch
             images, labels = batch
 
-            preds = model(images) #Pass Batch
-            loss = F.cross_entropy(preds, labels) #Calculating Loss
+            preds = model(images)
+            loss = F.cross_entropy(preds, labels)
 
             optimizer.zero_grad()
             loss.backward() #Calculating the Gradients
@@ -120,8 +125,8 @@ accuracy = accuracy_score(targets, all_preds)
 print("Confusion_matrix: \n", cm)
 print("Overall accuracy on test set: ", accuracy)
 
-#save the model
-PATH = 'yourpath/model1.pth'
+#save the trained model to repository root
+PATH = './model1.pth'
 torch.save(model, PATH)
 
 #Load model

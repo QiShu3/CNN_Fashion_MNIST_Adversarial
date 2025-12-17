@@ -29,6 +29,7 @@ train_sampler = SubsetRandomSampler(list(range(48000)))
 valid_sampler = SubsetRandomSampler(list(range(12000)))
 
 class Network(nn.Module):
+    """与训练脚本一致的CNN，用于加载已训练模型并进行攻击测试"""
     def __init__(self):
         super(Network, self).__init__()
         self.conv1 = nn.Conv2d(in_channels=1, out_channels=6, kernel_size=5)
@@ -39,6 +40,7 @@ class Network(nn.Module):
         self.out = nn.Linear(in_features=60, out_features=10)
         
     def forward(self, t):
+        """前向传播：返回未归一化的类别logits"""
         t = F.relu(self.conv1(t))
         t = F.max_pool2d(t, kernel_size=2, stride=2)
 
@@ -51,9 +53,9 @@ class Network(nn.Module):
         return t
 
 model = Network()
-#Load model
-PATH = 'yourpath/model1.pth'
-model = torch.load(PATH)
+#Load model from repository root
+PATH = './model1.pth'
+model = torch.load(PATH, weights_only=False)
 model.eval()
 
 
@@ -85,72 +87,48 @@ adv_examples = []
 
 # FGSM attack code
 def fgsm_attack(image, epsilon, data_grad):
-    # Collect the element-wise sign of the data gradient
+    """FGSM攻击：按梯度符号扰动图像并裁剪到[0,1]"""
     sign_data_grad = data_grad.sign()
-    # Create the perturbed image by adjusting each pixel of the input image
-    perturbed_image = image + epsilon*sign_data_grad
-    # Adding clipping to maintain [0,1] range
+    perturbed_image = image + epsilon * sign_data_grad
     perturbed_image = torch.clamp(perturbed_image, 0, 1)
-    # Return the perturbed image
     return perturbed_image
 
-def test( model, test_loader, epsilon ):
-    
-    # Accuracy counter
+def test(model, test_loader, epsilon):
+    """在给定epsilon下对测试集执行FGSM并统计准确率"""
     correct = 0
     adv_examples = []
 
-    # Loop over all examples in test set
     for data, target in test_loader:
-
-        # Set requires_grad attribute of tensor. Important for Attack
         data.requires_grad = True
 
-        # Forward pass the data through the model
         output = model(data)
-        init_pred = output.max(1, keepdim=True)[1] # get the index of the max log-probability
+        init_pred = output.max(1, keepdim=True)[1]
 
-        # If the initial prediction is wrong, dont bother attacking, just move on
         if init_pred.item() != target.item():
             continue
 
-        # Calculate the loss
-        loss = F.nll_loss(output, target)
-
-        # Zero all existing gradients
+        # 与训练一致使用交叉熵以避免log_softmax不匹配
+        loss = F.cross_entropy(output, target)
         model.zero_grad()
-
-        # Calculate gradients of model in backward pass
         loss.backward()
-
-        # Collect datagrad
         data_grad = data.grad.data
 
-        # Call FGSM Attack
         perturbed_data = fgsm_attack(data, epsilon, data_grad)
-
-        # Re-classify the perturbed image
         output = model(perturbed_data)
 
-        # Check for success
-        final_pred = output.max(1, keepdim=True)[1] # get the index of the max log-probability
+        final_pred = output.max(1, keepdim=True)[1]
         if final_pred.item() == target.item():
             correct += 1
-            # Special case for saving 0 epsilon examples
             if (epsilon == 0) and (len(adv_examples) < 5):
                 adv_ex = perturbed_data.squeeze().detach().cpu().numpy()
-                adv_examples.append( (init_pred.item(), final_pred.item(), adv_ex) )
+                adv_examples.append((init_pred.item(), final_pred.item(), adv_ex))
         else:
-            # Save some adv examples for visualization later
             if len(adv_examples) < 5:
                 adv_ex = perturbed_data.squeeze().detach().cpu().numpy()
-                adv_examples.append( (init_pred.item(), final_pred.item(), adv_ex) )
+                adv_examples.append((init_pred.item(), final_pred.item(), adv_ex))
 
-    # Calculate final accuracy for this epsilon
-    final_acc = correct/float(len(test_loader))
+    final_acc = correct / float(len(test_loader))
     print("Epsilon: {}\tTest Accuracy = {} / {} = {}".format(epsilon, correct, len(test_loader), final_acc))
-
-    # Return the accuracy and an adversarial example
     return final_acc, adv_examples
 
 accuracies = []
@@ -169,8 +147,8 @@ plt.xticks(np.arange(0, .35, step=0.05))
 plt.title("Accuracy vs Epsilon")
 plt.xlabel("Epsilon")
 plt.ylabel("Accuracy")
-plt.show()
-#plt.savefig("saved/accuracy_epsilon.png", dpi=1200)
+# 非交互环境下直接保存图像
+plt.savefig("saved/accuracy_epsilon.png", dpi=300)
 
 #after running adversarial attack here are the results
 '''

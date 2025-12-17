@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FGSM 对抗攻击演示</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>FGSM 对抗攻击演示</h1>
+    </header>
+    <main>
+      <section class="panel">
+        <div class="field">
+          <label>上传图片（PNG/JPG）</label>
+          <input id="imageInput" type="file" accept="image/*" />
+        </div>
+        <div class="field">
+          <label>上传模型（可选，.pth）</label>
+          <input id="modelInput" type="file" accept=".pth" />
+        </div>
+        <div class="field">
+          <label>epsilon</label>
+          <div class="epsilon-row">
+            <input id="epsilonRange" type="range" min="0" max="0.3" step="0.01" value="0.15" />
+            <input id="epsilonNumber" type="number" min="0" max="0.3" step="0.01" value="0.15" />
+          </div>
+        </div>
+        <div class="field">
+          <label>自动攻击参数（步长 / 最大扰动）</label>
+          <div class="epsilon-row">
+            <input id="stepNumber" type="number" min="0.001" max="0.2" step="0.001" value="0.01" />
+            <input id="maxEpsNumber" type="number" min="0" max="1" step="0.01" value="0.3" />
+          </div>
+        </div>
+        <div class="actions">
+          <button id="attackBtn">执行攻击</button>
+          <button id="downloadBtn" class="secondary">下载对抗样本</button>
+          <button id="autoBtn" class="secondary">自动攻击</button>
+        </div>
+      </section>
+
+      <section class="result">
+        <div class="cards">
+          <div class="card">
+            <h3>原始图片</h3>
+            <img id="origImg" alt="原始图片预览" />
+          </div>
+          <div class="card">
+            <h3>对抗图片</h3>
+            <img id="advImg" alt="对抗图片预览" />
+          </div>
+        </div>
+        <div class="summary">
+          <div><strong>攻击结果：</strong> <span id="successText">—</span></div>
+          <div><strong>最小扰动值 ε：</strong> <span id="epsilonText">—</span></div>
+          <div><strong>预测前：</strong> <span id="predBefore">—</span></div>
+          <div><strong>预测后：</strong> <span id="predAfter">—</span></div>
+        </div>
+      </section>
+
+      <section class="result">
+        <h3>更多对比</h3>
+        <div class="cards">
+          <div class="card">
+            <h3>签名差值（Raw Diff）</h3>
+            <canvas id="diffRawCanvas" width="112" height="112"></canvas>
+          </div>
+          <div class="card">
+            <h3>绝对差值（Abs Diff）</h3>
+            <canvas id="diffAbsCanvas" width="112" height="112"></canvas>
+          </div>
+          <div class="card">
+            <h3>扰动热力图（Heatmap）</h3>
+            <canvas id="heatmapCanvas" width="112" height="112"></canvas>
+          </div>
+        </div>
+        <div class="cards">
+          <div class="card">
+            <h3>叠加对比（透明度可调）</h3>
+            <div class="overlay-stack">
+              <img id="overlayOrig" alt="原图" />
+              <img id="overlayAdv" alt="对抗图" />
+            </div>
+            <div class="overlay-control">
+              <label for="overlayRange">对抗透明度</label>
+              <input id="overlayRange" type="range" min="0" max="1" step="0.01" value="1" />
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <small>后端：FastAPI (`/attack`, `/attack/adv-png`, `/attack/auto`)</small>
+    </footer>
+
+    <script src="./app.js"></script>
+  </body>
+  </html>

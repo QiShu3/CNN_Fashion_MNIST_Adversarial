@@ -1,0 +1,23 @@
+*{box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;color:#222;background:#f7f7f9}
+header{padding:16px 24px;background:#111;color:#fff}
+h1{margin:0;font-size:20px}
+main{padding:24px}
+.panel{background:#fff;border:1px solid #e6e6ef;border-radius:12px;padding:16px;max-width:900px;margin:0 auto}
+.field{margin-bottom:16px}
+.field label{display:block;margin-bottom:8px;font-weight:600}
+.epsilon-row{display:flex;gap:12px;align-items:center}
+.actions{display:flex;gap:12px;margin-top:8px}
+button{padding:10px 16px;border:1px solid #1f6feb;background:#2da44e;color:#fff;border-radius:8px;cursor:pointer}
+button.secondary{background:#0a84ff;border-color:#0a84ff}
+button:disabled{opacity:.6;cursor:not-allowed}
+.result{max-width:900px;margin:20px auto 0}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.card{background:#fff;border:1px solid #e6e6ef;border-radius:12px;padding:12px}
+.card img{width:100%;height:auto;display:block;border-radius:8px;border:1px solid #eee;background:#fafafa}
+.card canvas{width:100%;height:auto;display:block;border-radius:8px;border:1px solid #eee;background:#fafafa;image-rendering:pixelated}
+.summary{margin-top:12px;background:#fff;border:1px solid #e6e6ef;border-radius:12px;padding:12px;line-height:1.8}
+.overlay-stack{position:relative;width:100%;max-width:300px;aspect-ratio:1/1;margin:0 auto}
+.overlay-stack img{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:contain;border-radius:8px;border:1px solid #eee;background:#fafafa}
+.overlay-control{margin-top:8px;display:flex;gap:8px;align-items:center}
+footer{padding:16px 24px;color:#666}
