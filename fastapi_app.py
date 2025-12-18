@@ -16,7 +16,14 @@ from torchvision import transforms
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
-from quick_fgsm_attack import Network, load_model, fgsm_attack, attack_one, FASHION_MNIST_LABELS
+from quick_fgsm_attack import (
+    Network,
+    load_model,
+    fgsm_attack,
+    attack_one,
+    attack_one_iter,
+    FASHION_MNIST_LABELS,
+)
 import sys
 
 
@@ -92,8 +99,12 @@ async def attack_endpoint(
     image: UploadFile = File(...),
     model: Optional[UploadFile] = File(None),
     epsilon: float = Form(0.15),
+    attack_type: str = Form("fgsm"),
+    iters: int = Form(10),
+    alpha: Optional[float] = Form(None),
+    use_mask: bool = Form(True),
 ):
-    """接收上传的模型与图片，执行FGSM攻击并返回对比结果与样本"""
+    """接收上传的模型与图片，执行攻击（FGSM 或 I-FGSM）并返回结果与样本"""
     device = torch.device("cpu")
     if model is not None:
         model_bytes = await model.read()
@@ -113,7 +124,10 @@ async def attack_endpoint(
 
     img_bytes = await image.read()
     tensor = bytes_to_tensor(img_bytes)
-    res = attack_one(mdl, tensor, None, epsilon, device)
+    if attack_type.lower() in ("ifgsm", "pgd"):
+        res = attack_one_iter(mdl, tensor, None, epsilon, iters, alpha, device, use_mask=use_mask)
+    else:
+        res = attack_one(mdl, tensor, None, epsilon, device)
 
     pred_before_id = res["pred_before"]
     pred_after_id = res["pred_after"]
@@ -129,6 +143,71 @@ async def attack_endpoint(
         pred_after_name=FASHION_MNIST_LABELS[pred_after_id],
         original_image_base64=original_b64,
         adv_image_base64=adv_b64,
+    )
+
+class AttackCompareResponse(BaseModel):
+    success_fgsm: bool
+    success_ifgsm: bool
+    epsilon: float
+    pred_before_id: int
+    pred_before_name: str
+    pred_after_fgsm_id: int
+    pred_after_fgsm_name: str
+    pred_after_ifgsm_id: int
+    pred_after_ifgsm_name: str
+    original_image_base64: str
+    adv_fgsm_base64: str
+    adv_ifgsm_base64: str
+
+@app.post("/attack/compare", response_model=AttackCompareResponse)
+async def attack_compare_endpoint(
+    image: UploadFile = File(...),
+    model: Optional[UploadFile] = File(None),
+    epsilon: float = Form(0.15),
+    iters: int = Form(10),
+    alpha: Optional[float] = Form(None),
+    use_mask: bool = Form(True),
+):
+    """对比同一图片在相同 epsilon 下的 FGSM 与 I-FGSM 攻击结果"""
+    device = torch.device("cpu")
+    if model is not None:
+        model_bytes = await model.read()
+        try:
+            sys.modules.setdefault("__main__", sys.modules.get("__main__"))
+            setattr(sys.modules["__main__"], "Network", Network)
+            torch.serialization.add_safe_globals([getattr(sys.modules["__main__"], "Network")])
+            mdl = torch.load(io.BytesIO(model_bytes), weights_only=False, map_location=device)
+            mdl.eval()
+        except Exception:
+            state = torch.load(io.BytesIO(model_bytes), weights_only=True, map_location=device)
+            mdl = Network().to(device)
+            mdl.load_state_dict(state)
+            mdl.eval()
+    else:
+        mdl = load_model_safe("./model1.pth", device)
+
+    img_bytes = await image.read()
+    tensor = bytes_to_tensor(img_bytes)
+    res_fgsm = attack_one(mdl, tensor, None, epsilon, device)
+    res_ifgsm = attack_one_iter(mdl, tensor, None, epsilon, iters, alpha, device, use_mask=use_mask)
+
+    pred_before_id = res_fgsm["pred_before"]
+    original_b64 = tensor_to_base64_png(tensor)
+    adv_fgsm_b64 = tensor_to_base64_png(res_fgsm["adv_image"])
+    adv_ifgsm_b64 = tensor_to_base64_png(res_ifgsm["adv_image"])
+    return AttackCompareResponse(
+        success_fgsm=res_fgsm["success"],
+        success_ifgsm=res_ifgsm["success"],
+        epsilon=epsilon,
+        pred_before_id=pred_before_id,
+        pred_before_name=FASHION_MNIST_LABELS[pred_before_id],
+        pred_after_fgsm_id=res_fgsm["pred_after"],
+        pred_after_fgsm_name=FASHION_MNIST_LABELS[res_fgsm["pred_after"]],
+        pred_after_ifgsm_id=res_ifgsm["pred_after"],
+        pred_after_ifgsm_name=FASHION_MNIST_LABELS[res_ifgsm["pred_after"]],
+        original_image_base64=original_b64,
+        adv_fgsm_base64=adv_fgsm_b64,
+        adv_ifgsm_base64=adv_ifgsm_b64,
     )
 
 @app.post("/attack/adv-png")

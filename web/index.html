@@ -21,10 +21,24 @@
           <input id="modelInput" type="file" accept=".pth" />
         </div>
         <div class="field">
+          <label>攻击类型</label>
+          <select id="attackType">
+            <option value="fgsm" selected>FGSM（单步）</option>
+            <option value="ifgsm">I-FGSM（迭代）</option>
+          </select>
+        </div>
+        <div class="field">
           <label>epsilon</label>
           <div class="epsilon-row">
             <input id="epsilonRange" type="range" min="0" max="0.3" step="0.01" value="0.15" />
             <input id="epsilonNumber" type="number" min="0" max="0.3" step="0.01" value="0.15" />
+          </div>
+        </div>
+        <div class="field">
+          <label>迭代参数（iters / alpha，可选）</label>
+          <div class="epsilon-row">
+            <input id="itersNumber" type="number" min="1" max="100" step="1" value="10" />
+            <input id="alphaNumber" type="number" min="0.0001" max="0.5" step="0.0001" placeholder="默认 epsilon/iters" />
           </div>
         </div>
         <div class="field">
@@ -38,6 +52,7 @@
           <button id="attackBtn">执行攻击</button>
           <button id="downloadBtn" class="secondary">下载对抗样本</button>
           <button id="autoBtn" class="secondary">自动攻击</button>
+          <button id="compareBtn" class="secondary">对比 FGSM / I-FGSM</button>
         </div>
       </section>
 
@@ -51,12 +66,17 @@
             <h3>对抗图片</h3>
             <img id="advImg" alt="对抗图片预览" />
           </div>
+          <div class="card">
+            <h3>I-FGSM 对抗图片</h3>
+            <img id="advIfgsmImg" alt="I-FGSM 对抗图片预览" />
+          </div>
         </div>
         <div class="summary">
           <div><strong>攻击结果：</strong> <span id="successText">—</span></div>
           <div><strong>最小扰动值 ε：</strong> <span id="epsilonText">—</span></div>
           <div><strong>预测前：</strong> <span id="predBefore">—</span></div>
           <div><strong>预测后：</strong> <span id="predAfter">—</span></div>
+          <div><strong>I-FGSM 预测后：</strong> <span id="predAfterIfgsm">—</span></div>
         </div>
       </section>
 

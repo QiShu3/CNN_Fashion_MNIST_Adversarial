@@ -10,6 +10,7 @@ function initPage() {
   const attackBtn = document.getElementById("attackBtn");
   const downloadBtn = document.getElementById("downloadBtn");
   const autoBtn = document.getElementById("autoBtn");
+  const compareBtn = document.getElementById("compareBtn");
 
   epsilonRange.addEventListener("input", () => {
     epsilonNumber.value = epsilonRange.value;
@@ -22,6 +23,7 @@ function initPage() {
   attackBtn.addEventListener("click", handleAttack);
   downloadBtn.addEventListener("click", downloadAdversarialPng);
   autoBtn.addEventListener("click", handleAutoAttack);
+  compareBtn.addEventListener("click", handleCompareAttack);
 }
 
 /**
@@ -42,6 +44,10 @@ async function handleAttack() {
   const imageFile = document.getElementById("imageInput").files?.[0];
   const modelFile = document.getElementById("modelInput").files?.[0] || null;
   const epsilon = parseFloat(document.getElementById("epsilonNumber").value || "0.15");
+  const attackType = document.getElementById("attackType").value;
+  const iters = parseInt(document.getElementById("itersNumber").value || "10", 10);
+  const alphaInput = document.getElementById("alphaNumber").value;
+  const alpha = alphaInput ? parseFloat(alphaInput) : null;
 
   if (!imageFile) {
     alert("请先选择图片");
@@ -52,6 +58,12 @@ async function handleAttack() {
   fd.append("image", imageFile);
   if (modelFile) fd.append("model", modelFile);
   fd.append("epsilon", String(epsilon));
+  fd.append("attack_type", attackType);
+  if (attackType === "ifgsm") {
+    fd.append("iters", String(iters));
+    if (alpha !== null) fd.append("alpha", String(alpha));
+    fd.append("use_mask", "true");
+  }
 
   setLoading(true);
   try {
@@ -136,6 +148,8 @@ function setLoading(loading) {
   downloadBtn.disabled = loading;
   const autoBtn = document.getElementById("autoBtn");
   autoBtn.disabled = loading;
+  const compareBtn = document.getElementById("compareBtn");
+  compareBtn.disabled = loading;
 }
 
 // 页面初始化
@@ -178,6 +192,55 @@ async function handleAutoAttack() {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
     renderAttackResult(data);
+  } catch (err) {
+    console.error(err);
+    alert("请求失败，请检查后端是否运行并查看控制台日志");
+  } finally {
+    setLoading(false);
+  }
+}
+
+/**
+ * 对比同一 epsilon 下的 FGSM 与 I-FGSM
+ */
+async function handleCompareAttack() {
+  const imageFile = document.getElementById("imageInput").files?.[0];
+  const modelFile = document.getElementById("modelInput").files?.[0] || null;
+  const epsilon = parseFloat(document.getElementById("epsilonNumber").value || "0.15");
+  const iters = parseInt(document.getElementById("itersNumber").value || "10", 10);
+  const alphaInput = document.getElementById("alphaNumber").value;
+  const alpha = alphaInput ? parseFloat(alphaInput) : null;
+  if (!imageFile) {
+    alert("请先选择图片");
+    return;
+  }
+  const fd = new FormData();
+  fd.append("image", imageFile);
+  if (modelFile) fd.append("model", modelFile);
+  fd.append("epsilon", String(epsilon));
+  fd.append("iters", String(iters));
+  if (alpha !== null) fd.append("alpha", String(alpha));
+  fd.append("use_mask", "true");
+  setLoading(true);
+  try {
+    const resp = await fetch(`${API_BASE}/attack/compare`, {
+      method: "POST",
+      body: fd,
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    document.getElementById("origImg").src = data.original_image_base64;
+    document.getElementById("advImg").src = data.adv_fgsm_base64;
+    document.getElementById("advIfgsmImg").src = data.adv_ifgsm_base64;
+    document.getElementById("successText").textContent =
+      `FGSM: ${data.success_fgsm ? "成功" : "失败"} / I-FGSM: ${data.success_ifgsm ? "成功" : "失败"}`;
+    const eps = typeof data.epsilon === "number" ? data.epsilon.toFixed(3) : String(data.epsilon);
+    document.getElementById("epsilonText").textContent = eps;
+    document.getElementById("predBefore").textContent = `${data.pred_before_name} (#${data.pred_before_id})`;
+    document.getElementById("predAfter").textContent = `${data.pred_after_fgsm_name} (#${data.pred_after_fgsm_id})`;
+    document.getElementById("predAfterIfgsm").textContent = `${data.pred_after_ifgsm_name} (#${data.pred_after_ifgsm_id})`;
+    renderComparisons(data.original_image_base64, data.adv_fgsm_base64);
+    setupOverlay(data.original_image_base64, data.adv_ifgsm_base64);
   } catch (err) {
     console.error(err);
     alert("请求失败，请检查后端是否运行并查看控制台日志");
