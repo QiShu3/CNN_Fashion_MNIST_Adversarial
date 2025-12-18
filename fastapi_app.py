@@ -300,7 +300,10 @@ async def attack_targeted_endpoint(
     )
 
 class AttackModeCompareResponse(BaseModel):
-    epsilon: float
+    # 分别记录无目标和靶向各自成功的最小 epsilon
+    untargeted_epsilon: float
+    targeted_epsilon: float
+    
     target_class_id: int
     target_class_name: str
     
@@ -326,15 +329,19 @@ async def attack_compare_modes_endpoint(
     image: UploadFile = File(...),
     target_class_id: int = Form(...),
     model: Optional[UploadFile] = File(None),
-    epsilon: float = Form(0.15), # 如果提供了epsilon，作为搜索的上限；如果没有（默认0.15可能偏小），内部可设一个较大值
+    epsilon: float = Form(0.15),
     attack_type: str = Form("fgsm"), # 'fgsm' or 'ifgsm'
     iters: int = Form(10),
     alpha: Optional[float] = Form(None),
     use_mask: bool = Form(True),
 ):
-    """对比无目标攻击与靶向攻击，自动搜索使得两者均成功的最小 epsilon"""
+    """
+    对比无目标攻击与靶向攻击，分别搜索使得各自成功的最小 epsilon。
+    为了提高效率，不再强制两者同时成功，而是分别记录各自成功的时刻。
+    如果搜索到上限仍未成功，则返回上限时的结果。
+    """
     device = torch.device("cpu")
-    # Model loading logic (same as above, can be refactored but inline is fine for now)
+    # Model loading
     if model is not None:
         model_bytes = await model.read()
         try:
@@ -354,61 +361,79 @@ async def attack_compare_modes_endpoint(
     img_bytes = await image.read()
     tensor = bytes_to_tensor(img_bytes)
     
-    # 搜索参数设置
-    # 如果用户传的 epsilon 小于 0.3，则强制设为 0.5 作为搜索上限，确保能搜到
-    # 如果用户传的很大，就用用户的
+    # 搜索参数
     max_search_epsilon = max(epsilon, 0.5) 
     step = 0.005
     current_eps = 0.0
     
-    final_res_untargeted = None
-    final_res_targeted = None
+    # 状态追踪
+    found_untargeted = False
+    found_targeted = False
     
-    # 开始搜索
+    best_res_untargeted = None
+    best_res_targeted = None
+    
+    untargeted_eps_val = max_search_epsilon
+    targeted_eps_val = max_search_epsilon
+    
+    # 初始预测
+    # 我们可以先做一次 0 扰动的预测，看看是否本身就预测错了
+    # 但 attack_one 会返回 pred_before，所以直接进入循环即可。
+    
     while current_eps <= max_search_epsilon + 1e-9:
-        # Run Untargeted
-        if attack_type.lower() in ("ifgsm", "pgd"):
-            res_u = attack_one_iter(mdl, tensor, None, current_eps, iters, alpha, device, use_mask=use_mask)
-        else:
-            res_u = attack_one(mdl, tensor, None, current_eps, device)
-            
-        # Run Targeted
-        if attack_type.lower() in ("ifgsm", "pgd"):
-            res_t = attack_one_iter_targeted(mdl, tensor, target_class_id, current_eps, iters, alpha, device, use_mask=use_mask)
-        else:
-            res_t = attack_one_targeted(mdl, tensor, target_class_id, current_eps, device)
-            
-        final_res_untargeted = res_u
-        final_res_targeted = res_t
+        # 只要有一方还没成功，就继续跑该方的攻击
         
-        # 检查是否同时成功
-        # 注意：如果目标类别与原始预测一致，靶向攻击成功定义可能需要斟酌。
-        # 这里 res_t["success"] 是指 pred_after == target_label
-        # res_u["success"] 是指 pred_after != pred_before
-        if res_u["success"] and res_t["success"]:
+        # 1. 无目标攻击
+        if not found_untargeted:
+            if attack_type.lower() in ("ifgsm", "pgd"):
+                res_u = attack_one_iter(mdl, tensor, None, current_eps, iters, alpha, device, use_mask=use_mask)
+            else:
+                res_u = attack_one(mdl, tensor, None, current_eps, device)
+            
+            best_res_untargeted = res_u
+            if res_u["success"]:
+                found_untargeted = True
+                untargeted_eps_val = current_eps
+
+        # 2. 靶向攻击
+        if not found_targeted:
+            if attack_type.lower() in ("ifgsm", "pgd"):
+                res_t = attack_one_iter_targeted(mdl, tensor, target_class_id, current_eps, iters, alpha, device, use_mask=use_mask)
+            else:
+                res_t = attack_one_targeted(mdl, tensor, target_class_id, current_eps, device)
+            
+            best_res_targeted = res_t
+            if res_t["success"]:
+                found_targeted = True
+                targeted_eps_val = current_eps
+        
+        # 如果两者都找到了，或者两者都无需再找（比如已经到了上限，但while循环自然会处理上限），提前退出
+        if found_untargeted and found_targeted:
             break
             
         current_eps += step
-        
+
     original_b64 = tensor_to_base64_png(tensor)
     
     return AttackModeCompareResponse(
-        epsilon=round(current_eps, 6) if current_eps <= max_search_epsilon else max_search_epsilon,
+        untargeted_epsilon=round(untargeted_eps_val, 6),
+        targeted_epsilon=round(targeted_eps_val, 6),
+        
         target_class_id=target_class_id,
         target_class_name=FASHION_MNIST_LABELS[target_class_id],
         
-        pred_before_id=final_res_untargeted["pred_before"],
-        pred_before_name=FASHION_MNIST_LABELS[final_res_untargeted["pred_before"]],
+        pred_before_id=best_res_untargeted["pred_before"],
+        pred_before_name=FASHION_MNIST_LABELS[best_res_untargeted["pred_before"]],
         
-        untargeted_success=final_res_untargeted["success"],
-        untargeted_pred_after_id=final_res_untargeted["pred_after"],
-        untargeted_pred_after_name=FASHION_MNIST_LABELS[final_res_untargeted["pred_after"]],
-        untargeted_adv_base64=tensor_to_base64_png(final_res_untargeted["adv_image"]),
+        untargeted_success=best_res_untargeted["success"],
+        untargeted_pred_after_id=best_res_untargeted["pred_after"],
+        untargeted_pred_after_name=FASHION_MNIST_LABELS[best_res_untargeted["pred_after"]],
+        untargeted_adv_base64=tensor_to_base64_png(best_res_untargeted["adv_image"]),
         
-        targeted_success=final_res_targeted["success"],
-        targeted_pred_after_id=final_res_targeted["pred_after"],
-        targeted_pred_after_name=FASHION_MNIST_LABELS[final_res_targeted["pred_after"]],
-        targeted_adv_base64=tensor_to_base64_png(final_res_targeted["adv_image"]),
+        targeted_success=best_res_targeted["success"],
+        targeted_pred_after_id=best_res_targeted["pred_after"],
+        targeted_pred_after_name=FASHION_MNIST_LABELS[best_res_targeted["pred_after"]],
+        targeted_adv_base64=tensor_to_base64_png(best_res_targeted["adv_image"]),
         
         original_image_base64=original_b64
     )

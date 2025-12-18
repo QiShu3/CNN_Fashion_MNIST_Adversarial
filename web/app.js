@@ -312,7 +312,7 @@ async function handleCompareAttack() {
     document.getElementById("successText").textContent =
       `FGSM: ${data.success_fgsm ? "成功" : "失败"} / I-FGSM: ${data.success_ifgsm ? "成功" : "失败"}`;
     const eps = typeof data.epsilon === "number" ? data.epsilon.toFixed(3) : String(data.epsilon);
-    document.getElementById("epsilonText").textContent = eps;
+    document.getElementById("epsilonText").textContent = `FGSM & I-FGSM: ${eps}`;
     document.getElementById("predBefore").textContent = `${data.pred_before_name} (#${data.pred_before_id})`;
     document.getElementById("predAfter").textContent = `${data.pred_after_fgsm_name} (#${data.pred_after_fgsm_id})`;
     
@@ -398,8 +398,11 @@ async function handleCompareModes() {
     document.getElementById("successText").textContent =
       `无目标: ${data.untargeted_success ? "成功" : "失败"} / 靶向: ${data.targeted_success ? "成功" : "失败"}`;
     
-    const eps = typeof data.epsilon === "number" ? data.epsilon.toFixed(3) : String(data.epsilon);
-    document.getElementById("epsilonText").textContent = eps;
+    // 分别显示两个 Epsilon
+    const epsU = typeof data.untargeted_epsilon === "number" ? data.untargeted_epsilon.toFixed(3) : String(data.untargeted_epsilon);
+    const epsT = typeof data.targeted_epsilon === "number" ? data.targeted_epsilon.toFixed(3) : String(data.targeted_epsilon);
+    document.getElementById("epsilonText").textContent = `无目标:${epsU} / 靶向:${epsT}`;
+    
     document.getElementById("predBefore").textContent = `${data.pred_before_name} (#${data.pred_before_id})`;
     
     document.getElementById("predAfter").textContent = `${data.untargeted_pred_after_name} (#${data.untargeted_pred_after_id})`;
