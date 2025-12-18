@@ -1,5 +1,7 @@
 const API_BASE = ""; // 与 FastAPI 同源部署时留空；若跨域可改为完整地址
 
+let currentCompareData = null; // 存储最近一次对比攻击的结果
+
 /**
  * 初始化事件绑定与输入联动
  */
@@ -24,6 +26,12 @@ function initPage() {
   downloadBtn.addEventListener("click", downloadAdversarialPng);
   autoBtn.addEventListener("click", handleAutoAttack);
   compareBtn.addEventListener("click", handleCompareAttack);
+
+  // 绑定对比模式切换事件
+  const radios = document.getElementsByName("compareMode");
+  radios.forEach(radio => {
+    radio.addEventListener("change", updateCompareView);
+  });
 }
 
 /**
@@ -53,6 +61,9 @@ async function handleAttack() {
     alert("请先选择图片");
     return;
   }
+
+  // 隐藏对比切换控件
+  document.getElementById("compareControl").style.display = "none";
 
   const fd = new FormData();
   fd.append("image", imageFile);
@@ -235,9 +246,17 @@ async function handleCompareAttack() {
     });
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
+    currentCompareData = data; // 保存数据以供切换
+
     document.getElementById("origImg").src = data.original_image_base64;
     document.getElementById("advImg").src = data.adv_fgsm_base64;
     document.getElementById("advIfgsmImg").src = data.adv_ifgsm_base64;
+    
+    // 显示对比切换控件，并重置为 FGSM
+    const ctrl = document.getElementById("compareControl");
+    ctrl.style.display = "block";
+    document.querySelector('input[name="compareMode"][value="fgsm"]').checked = true;
+
     document.getElementById("successText").textContent =
       `FGSM: ${data.success_fgsm ? "成功" : "失败"} / I-FGSM: ${data.success_ifgsm ? "成功" : "失败"}`;
     const eps = typeof data.epsilon === "number" ? data.epsilon.toFixed(3) : String(data.epsilon);
@@ -245,14 +264,56 @@ async function handleCompareAttack() {
     document.getElementById("predBefore").textContent = `${data.pred_before_name} (#${data.pred_before_id})`;
     document.getElementById("predAfter").textContent = `${data.pred_after_fgsm_name} (#${data.pred_after_fgsm_id})`;
     document.getElementById("predAfterIfgsm").textContent = `${data.pred_after_ifgsm_name} (#${data.pred_after_ifgsm_id})`;
+
+    if (data.mask_fgsm_base64) {
+      document.getElementById("maskImg").src = data.mask_fgsm_base64;
+      document.getElementById("maskImg").parentElement.style.display = "block";
+    } else {
+      document.getElementById("maskImg").parentElement.style.display = "none";
+    }
+
     renderComparisons(data.original_image_base64, data.adv_fgsm_base64);
-    setupOverlay(data.original_image_base64, data.adv_ifgsm_base64);
   } catch (err) {
     console.error(err);
     alert("请求失败，请检查后端是否运行并查看控制台日志");
   } finally {
     setLoading(false);
   }
+}
+
+/**
+ * 切换对比视图（FGSM / I-FGSM）
+ */
+function updateCompareView() {
+  console.log("updateCompareView called");
+  if (!currentCompareData) {
+    console.warn("No compare data available");
+    return;
+  }
+  const mode = document.querySelector('input[name="compareMode"]:checked').value;
+  console.log("Switching to mode:", mode);
+
+  const orig = currentCompareData.original_image_base64;
+  
+  let adv, mask;
+  if (mode === "ifgsm") {
+    adv = currentCompareData.adv_ifgsm_base64;
+    mask = currentCompareData.mask_ifgsm_base64;
+  } else {
+    adv = currentCompareData.adv_fgsm_base64;
+    mask = currentCompareData.mask_fgsm_base64;
+  }
+
+  // 更新掩膜显示
+  if (mask) {
+    document.getElementById("maskImg").src = mask;
+    document.getElementById("maskImg").parentElement.style.display = "block";
+  } else {
+    document.getElementById("maskImg").parentElement.style.display = "none";
+  }
+
+  // 强制清空 Canvas 以提供视觉反馈（可选，这里先不加闪烁，直接重绘）
+  renderComparisons(orig, adv);
 }
 
 /**
