@@ -88,6 +88,12 @@ async function handleAttack() {
 function renderAttackResult(data) {
   document.getElementById("origImg").src = data.original_image_base64;
   document.getElementById("advImg").src = data.adv_image_base64;
+  if (data.mask_image_base64) {
+    document.getElementById("maskImg").src = data.mask_image_base64;
+    document.getElementById("maskImg").parentElement.style.display = "block";
+  } else {
+    document.getElementById("maskImg").parentElement.style.display = "none";
+  }
   document.getElementById("successText").textContent = data.success ? "成功" : "失败";
   const eps = typeof data.epsilon === "number" ? data.epsilon.toFixed(3) : String(data.epsilon);
   document.getElementById("epsilonText").textContent = eps;

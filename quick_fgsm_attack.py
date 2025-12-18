@@ -83,8 +83,13 @@ def load_images(root: str) -> List[Tuple[str, torch.Tensor, Optional[int], Optio
     return results
 
 
-def fgsm_attack(image: torch.Tensor, epsilon: float, data_grad: torch.Tensor) -> torch.Tensor:
-    """FGSM攻击：按梯度符号扰动图像，并使用掩膜过滤背景噪点"""
+def fgsm_attack(image: torch.Tensor, epsilon: float, data_grad: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """FGSM攻击：按梯度符号扰动图像，并使用掩膜过滤背景噪点
+    
+    返回:
+    - perturbed_image: 对抗样本
+    - mask: 使用的背景掩膜
+    """
     sign_data_grad = data_grad.sign()
     
     # 生成掩膜：仅保留非背景像素（假设背景为纯黑0）
@@ -96,7 +101,7 @@ def fgsm_attack(image: torch.Tensor, epsilon: float, data_grad: torch.Tensor) ->
     
     perturbed_image = image + masked_perturbation
     perturbed_image = torch.clamp(perturbed_image, 0, 1)
-    return perturbed_image
+    return perturbed_image, mask
 
 def iterative_fgsm_attack(
     image: torch.Tensor,
@@ -107,23 +112,15 @@ def iterative_fgsm_attack(
     device: torch.device,
     use_mask: bool = True,
     random_start: bool = False,
-) -> torch.Tensor:
+) -> Tuple[torch.Tensor, torch.Tensor]:
     """I-FGSM/PGD迭代式攻击：在 L∞ 约束内多步更新并裁剪到[0,1]
-    
-    参数:
-    - image: 原始输入图像张量，形状 [1,1,28,28]
-    - epsilon: 总扰动上限（L∞球半径）
-    - iters: 迭代步数
-    - alpha: 每步更新步长；若为 None，则默认 epsilon / iters
-    - model: 分类模型（eval 模式）
-    - device: 设备
-    - use_mask: 是否使用前景掩膜抑制背景噪点
-    - random_start: 是否在 L∞ 球内随机初始化
     
     返回:
     - adv_image: 迭代攻击生成的对抗样本
+    - mask: 使用的背景掩膜
     """
     x0 = image.to(device)
+    mask = (x0 > 0.01).float() if use_mask else torch.ones_like(x0)
     x_adv = x0.clone().detach()
     if random_start:
         # 在 L∞ 球内随机初始化
@@ -143,13 +140,12 @@ def iterative_fgsm_attack(
         grad = x_adv.grad.detach()
         step = grad.sign()
         if use_mask:
-            mask = (x0 > 0.01).float()
             step = step * mask
         x_adv = x_adv.detach() + alpha * step
         # 投影回 L∞ 球并裁剪到[0,1]
         delta = torch.clamp(x_adv - x0, -epsilon, epsilon)
         x_adv = torch.clamp(x0 + delta, 0, 1)
-    return x_adv.detach()
+    return x_adv.detach(), mask
 
 def attack_one(model: nn.Module, image: torch.Tensor, label_id: Optional[int], epsilon: float, device: torch.device) -> Dict:
     """对单张图片执行攻击并返回前后预测、是否成功与对抗样本"""
@@ -169,7 +165,7 @@ def attack_one(model: nn.Module, image: torch.Tensor, label_id: Optional[int], e
     loss.backward()
     data_grad = image.grad.data
 
-    adv_image = fgsm_attack(image, epsilon, data_grad)
+    adv_image, mask = fgsm_attack(image, epsilon, data_grad)
     logits_adv = model(adv_image)
     pred_after = logits_adv.argmax(dim=1).item()
     success = (pred_after != pred_before) if label_id is None else (pred_after != label_id)
@@ -178,7 +174,8 @@ def attack_one(model: nn.Module, image: torch.Tensor, label_id: Optional[int], e
         "pred_before": pred_before,
         "pred_after": pred_after,
         "success": success,
-        "adv_image": adv_image.detach().cpu()
+        "adv_image": adv_image.detach().cpu(),
+        "mask": mask.detach().cpu()
     }
 
 def attack_one_iter(
@@ -196,7 +193,7 @@ def attack_one_iter(
     image = image.to(device)
     logits = model(image)
     pred_before = logits.argmax(dim=1).item()
-    adv_image = iterative_fgsm_attack(
+    adv_image, mask = iterative_fgsm_attack(
         image=image,
         epsilon=epsilon,
         iters=iters,
@@ -209,11 +206,13 @@ def attack_one_iter(
     logits_adv = model(adv_image)
     pred_after = logits_adv.argmax(dim=1).item()
     success = (pred_after != pred_before) if label_id is None else (pred_after != label_id)
+
     return {
         "pred_before": pred_before,
         "pred_after": pred_after,
         "success": success,
-        "adv_image": adv_image.detach().cpu()
+        "adv_image": adv_image.detach().cpu(),
+        "mask": mask.detach().cpu()
     }
 
 

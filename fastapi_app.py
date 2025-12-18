@@ -86,6 +86,7 @@ class AttackResponse(BaseModel):
     pred_after_name: str
     original_image_base64: str
     adv_image_base64: str
+    mask_image_base64: str
 
 
 @app.get("/health")
@@ -133,6 +134,7 @@ async def attack_endpoint(
     pred_after_id = res["pred_after"]
     original_b64 = tensor_to_base64_png(tensor)
     adv_b64 = tensor_to_base64_png(res["adv_image"])
+    mask_b64 = tensor_to_base64_png(res["mask"])
 
     return AttackResponse(
         success=res["success"],
@@ -143,6 +145,7 @@ async def attack_endpoint(
         pred_after_name=FASHION_MNIST_LABELS[pred_after_id],
         original_image_base64=original_b64,
         adv_image_base64=adv_b64,
+        mask_image_base64=mask_b64,
     )
 
 class AttackCompareResponse(BaseModel):
@@ -158,6 +161,8 @@ class AttackCompareResponse(BaseModel):
     original_image_base64: str
     adv_fgsm_base64: str
     adv_ifgsm_base64: str
+    mask_fgsm_base64: str
+    mask_ifgsm_base64: str
 
 @app.post("/attack/compare", response_model=AttackCompareResponse)
 async def attack_compare_endpoint(
@@ -195,6 +200,8 @@ async def attack_compare_endpoint(
     original_b64 = tensor_to_base64_png(tensor)
     adv_fgsm_b64 = tensor_to_base64_png(res_fgsm["adv_image"])
     adv_ifgsm_b64 = tensor_to_base64_png(res_ifgsm["adv_image"])
+    mask_fgsm_b64 = tensor_to_base64_png(res_fgsm["mask"])
+    mask_ifgsm_b64 = tensor_to_base64_png(res_ifgsm["mask"])
     return AttackCompareResponse(
         success_fgsm=res_fgsm["success"],
         success_ifgsm=res_ifgsm["success"],
@@ -208,6 +215,8 @@ async def attack_compare_endpoint(
         original_image_base64=original_b64,
         adv_fgsm_base64=adv_fgsm_b64,
         adv_ifgsm_base64=adv_ifgsm_b64,
+        mask_fgsm_base64=mask_fgsm_b64,
+        mask_ifgsm_base64=mask_ifgsm_b64,
     )
 
 @app.post("/attack/adv-png")
@@ -325,6 +334,7 @@ async def attack_auto(
             pred_after_id = res["pred_after"]
             original_b64 = tensor_to_base64_png(tensor)
             adv_b64 = tensor_to_base64_png(res["adv_image"])
+            mask_b64 = tensor_to_base64_png(res["mask"])
             return AttackResponse(
                 success=True,
                 epsilon=round(e, 6),
@@ -334,6 +344,7 @@ async def attack_auto(
                 pred_after_name=FASHION_MNIST_LABELS[pred_after_id],
                 original_image_base64=original_b64,
                 adv_image_base64=adv_b64,
+                mask_image_base64=mask_b64,
             )
         e += step
 
@@ -341,6 +352,7 @@ async def attack_auto(
     pred_after_id = best_res["pred_after"]
     original_b64 = tensor_to_base64_png(tensor)
     adv_b64 = tensor_to_base64_png(best_res["adv_image"])
+    mask_b64 = tensor_to_base64_png(best_res["mask"])
     return AttackResponse(
         success=False,
         epsilon=round(min(max_epsilon, e - step), 6),
@@ -350,6 +362,7 @@ async def attack_auto(
         pred_after_name=FASHION_MNIST_LABELS[pred_after_id],
         original_image_base64=original_b64,
         adv_image_base64=adv_b64,
+        mask_image_base64=mask_b64,
     )
 
 @app.post("/attack/path", response_model=AttackResponse)
