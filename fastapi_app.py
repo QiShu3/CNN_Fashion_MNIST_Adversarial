@@ -20,8 +20,12 @@ from quick_fgsm_attack import (
     Network,
     load_model,
     fgsm_attack,
+    fgsm_targeted_attack,
+    iterative_targeted_fgsm_attack,
     attack_one,
     attack_one_iter,
+    attack_one_targeted,
+    attack_one_iter_targeted,
     FASHION_MNIST_LABELS,
 )
 import sys
@@ -202,6 +206,7 @@ async def attack_compare_endpoint(
     adv_ifgsm_b64 = tensor_to_base64_png(res_ifgsm["adv_image"])
     mask_fgsm_b64 = tensor_to_base64_png(res_fgsm["mask"])
     mask_ifgsm_b64 = tensor_to_base64_png(res_ifgsm["mask"])
+
     return AttackCompareResponse(
         success_fgsm=res_fgsm["success"],
         success_ifgsm=res_ifgsm["success"],
@@ -217,6 +222,195 @@ async def attack_compare_endpoint(
         adv_ifgsm_base64=adv_ifgsm_b64,
         mask_fgsm_base64=mask_fgsm_b64,
         mask_ifgsm_base64=mask_ifgsm_b64,
+    )
+
+class TargetedAttackResponse(BaseModel):
+    success: bool
+    epsilon: float
+    target_class_id: int
+    target_class_name: str
+    pred_before_id: int
+    pred_before_name: str
+    pred_after_id: int
+    pred_after_name: str
+    original_image_base64: str
+    adv_image_base64: str
+    mask_image_base64: str
+
+@app.post("/attack/targeted", response_model=TargetedAttackResponse)
+async def attack_targeted_endpoint(
+    image: UploadFile = File(...),
+    model: Optional[UploadFile] = File(None),
+    target_class_id: int = Form(...),
+    epsilon: float = Form(0.15),
+    attack_type: str = Form("fgsm"),
+    iters: int = Form(10),
+    alpha: Optional[float] = Form(None),
+    use_mask: bool = Form(True),
+):
+    """靶向攻击接口：尝试将图片伪装成 target_class_id"""
+    device = torch.device("cpu")
+    if model is not None:
+        # Load uploaded model
+        model_bytes = await model.read()
+        try:
+            sys.modules.setdefault("__main__", sys.modules.get("__main__"))
+            setattr(sys.modules["__main__"], "Network", Network)
+            torch.serialization.add_safe_globals([getattr(sys.modules["__main__"], "Network")])
+            mdl = torch.load(io.BytesIO(model_bytes), weights_only=False, map_location=device)
+            mdl.eval()
+        except Exception:
+            state = torch.load(io.BytesIO(model_bytes), weights_only=True, map_location=device)
+            mdl = Network().to(device)
+            mdl.load_state_dict(state)
+            mdl.eval()
+    else:
+        mdl = load_model_safe("./model1.pth", device)
+
+    img_bytes = await image.read()
+    tensor = bytes_to_tensor(img_bytes)
+    
+    if attack_type.lower() in ("ifgsm", "pgd"):
+        res = attack_one_iter_targeted(
+            mdl, tensor, target_class_id, epsilon, iters, alpha, device, use_mask=use_mask
+        )
+    else:
+        res = attack_one_targeted(
+            mdl, tensor, target_class_id, epsilon, device
+        )
+
+    pred_before_id = res["pred_before"]
+    pred_after_id = res["pred_after"]
+    original_b64 = tensor_to_base64_png(tensor)
+    adv_b64 = tensor_to_base64_png(res["adv_image"])
+    mask_b64 = tensor_to_base64_png(res["mask"])
+
+    return TargetedAttackResponse(
+        success=res["success"],
+        epsilon=epsilon,
+        target_class_id=target_class_id,
+        target_class_name=FASHION_MNIST_LABELS[target_class_id],
+        pred_before_id=pred_before_id,
+        pred_before_name=FASHION_MNIST_LABELS[pred_before_id],
+        pred_after_id=pred_after_id,
+        pred_after_name=FASHION_MNIST_LABELS[pred_after_id],
+        original_image_base64=original_b64,
+        adv_image_base64=adv_b64,
+        mask_image_base64=mask_b64,
+    )
+
+class AttackModeCompareResponse(BaseModel):
+    epsilon: float
+    target_class_id: int
+    target_class_name: str
+    
+    pred_before_id: int
+    pred_before_name: str
+    
+    # Untargeted results
+    untargeted_success: bool
+    untargeted_pred_after_id: int
+    untargeted_pred_after_name: str
+    untargeted_adv_base64: str
+    
+    # Targeted results
+    targeted_success: bool
+    targeted_pred_after_id: int
+    targeted_pred_after_name: str
+    targeted_adv_base64: str
+    
+    original_image_base64: str
+
+@app.post("/attack/compare_modes", response_model=AttackModeCompareResponse)
+async def attack_compare_modes_endpoint(
+    image: UploadFile = File(...),
+    target_class_id: int = Form(...),
+    model: Optional[UploadFile] = File(None),
+    epsilon: float = Form(0.15), # 如果提供了epsilon，作为搜索的上限；如果没有（默认0.15可能偏小），内部可设一个较大值
+    attack_type: str = Form("fgsm"), # 'fgsm' or 'ifgsm'
+    iters: int = Form(10),
+    alpha: Optional[float] = Form(None),
+    use_mask: bool = Form(True),
+):
+    """对比无目标攻击与靶向攻击，自动搜索使得两者均成功的最小 epsilon"""
+    device = torch.device("cpu")
+    # Model loading logic (same as above, can be refactored but inline is fine for now)
+    if model is not None:
+        model_bytes = await model.read()
+        try:
+            sys.modules.setdefault("__main__", sys.modules.get("__main__"))
+            setattr(sys.modules["__main__"], "Network", Network)
+            torch.serialization.add_safe_globals([getattr(sys.modules["__main__"], "Network")])
+            mdl = torch.load(io.BytesIO(model_bytes), weights_only=False, map_location=device)
+            mdl.eval()
+        except Exception:
+            state = torch.load(io.BytesIO(model_bytes), weights_only=True, map_location=device)
+            mdl = Network().to(device)
+            mdl.load_state_dict(state)
+            mdl.eval()
+    else:
+        mdl = load_model_safe("./model1.pth", device)
+
+    img_bytes = await image.read()
+    tensor = bytes_to_tensor(img_bytes)
+    
+    # 搜索参数设置
+    # 如果用户传的 epsilon 小于 0.3，则强制设为 0.5 作为搜索上限，确保能搜到
+    # 如果用户传的很大，就用用户的
+    max_search_epsilon = max(epsilon, 0.5) 
+    step = 0.005
+    current_eps = 0.0
+    
+    final_res_untargeted = None
+    final_res_targeted = None
+    
+    # 开始搜索
+    while current_eps <= max_search_epsilon + 1e-9:
+        # Run Untargeted
+        if attack_type.lower() in ("ifgsm", "pgd"):
+            res_u = attack_one_iter(mdl, tensor, None, current_eps, iters, alpha, device, use_mask=use_mask)
+        else:
+            res_u = attack_one(mdl, tensor, None, current_eps, device)
+            
+        # Run Targeted
+        if attack_type.lower() in ("ifgsm", "pgd"):
+            res_t = attack_one_iter_targeted(mdl, tensor, target_class_id, current_eps, iters, alpha, device, use_mask=use_mask)
+        else:
+            res_t = attack_one_targeted(mdl, tensor, target_class_id, current_eps, device)
+            
+        final_res_untargeted = res_u
+        final_res_targeted = res_t
+        
+        # 检查是否同时成功
+        # 注意：如果目标类别与原始预测一致，靶向攻击成功定义可能需要斟酌。
+        # 这里 res_t["success"] 是指 pred_after == target_label
+        # res_u["success"] 是指 pred_after != pred_before
+        if res_u["success"] and res_t["success"]:
+            break
+            
+        current_eps += step
+        
+    original_b64 = tensor_to_base64_png(tensor)
+    
+    return AttackModeCompareResponse(
+        epsilon=round(current_eps, 6) if current_eps <= max_search_epsilon else max_search_epsilon,
+        target_class_id=target_class_id,
+        target_class_name=FASHION_MNIST_LABELS[target_class_id],
+        
+        pred_before_id=final_res_untargeted["pred_before"],
+        pred_before_name=FASHION_MNIST_LABELS[final_res_untargeted["pred_before"]],
+        
+        untargeted_success=final_res_untargeted["success"],
+        untargeted_pred_after_id=final_res_untargeted["pred_after"],
+        untargeted_pred_after_name=FASHION_MNIST_LABELS[final_res_untargeted["pred_after"]],
+        untargeted_adv_base64=tensor_to_base64_png(final_res_untargeted["adv_image"]),
+        
+        targeted_success=final_res_targeted["success"],
+        targeted_pred_after_id=final_res_targeted["pred_after"],
+        targeted_pred_after_name=FASHION_MNIST_LABELS[final_res_targeted["pred_after"]],
+        targeted_adv_base64=tensor_to_base64_png(final_res_targeted["adv_image"]),
+        
+        original_image_base64=original_b64
     )
 
 @app.post("/attack/adv-png")
@@ -383,6 +577,7 @@ def attack_by_path(
     pred_after_id = res["pred_after"]
     original_b64 = tensor_to_base64_png(tensor)
     adv_b64 = tensor_to_base64_png(res["adv_image"])
+    mask_b64 = tensor_to_base64_png(res["mask"])
 
     return AttackResponse(
         success=res["success"],
@@ -393,6 +588,7 @@ def attack_by_path(
         pred_after_name=FASHION_MNIST_LABELS[pred_after_id],
         original_image_base64=original_b64,
         adv_image_base64=adv_b64,
+        mask_image_base64=mask_b64,
     )
 
 
@@ -431,14 +627,6 @@ def test_loop(epsilon: float = 0.15, loops: int = 3):
         })
     return {"count": len(results), "results": results}
 
-# Enable CORS for local development if needed
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost", "http://localhost:8000", "http://127.0.0.1:8000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Mount static frontend
 app.mount("/", StaticFiles(directory="web", html=True), name="web")

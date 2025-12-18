@@ -28,6 +28,28 @@
           </select>
         </div>
         <div class="field">
+          <label>攻击目标模式</label>
+          <div class="epsilon-row">
+            <label><input type="radio" name="targetMode" value="untargeted" checked> 无目标（Untargeted）</label>
+            <label><input type="radio" name="targetMode" value="targeted"> 靶向（Targeted）</label>
+          </div>
+        </div>
+        <div class="field" id="targetClassRow" style="display: none;">
+          <label>目标类别（Target Class）</label>
+          <select id="targetClassInput">
+            <option value="0">T-shirt/top (0)</option>
+            <option value="1">Trouser (1)</option>
+            <option value="2">Pullover (2)</option>
+            <option value="3">Dress (3)</option>
+            <option value="4">Coat (4)</option>
+            <option value="5">Sandal (5)</option>
+            <option value="6">Shirt (6)</option>
+            <option value="7">Sneaker (7)</option>
+            <option value="8">Bag (8)</option>
+            <option value="9">Ankle boot (9)</option>
+          </select>
+        </div>
+        <div class="field">
           <label>epsilon</label>
           <div class="epsilon-row">
             <input id="epsilonRange" type="range" min="0" max="0.3" step="0.01" value="0.15" />
@@ -53,6 +75,7 @@
           <button id="downloadBtn" class="secondary">下载对抗样本</button>
           <button id="autoBtn" class="secondary">自动攻击</button>
           <button id="compareBtn" class="secondary">对比 FGSM / I-FGSM</button>
+          <button id="compareModesBtn" class="secondary">对比 无目标 / 靶向</button>
         </div>
       </section>
 
@@ -63,12 +86,16 @@
             <img id="origImg" alt="原始图片预览" />
           </div>
           <div class="card">
-            <h3>对抗图片</h3>
+            <h3 id="advTitle">对抗图片</h3>
             <img id="advImg" alt="对抗图片预览" />
           </div>
-          <div class="card">
+          <div class="card" id="advIfgsmCard" style="display: none;">
             <h3>I-FGSM 对抗图片</h3>
             <img id="advIfgsmImg" alt="I-FGSM 对抗图片预览" />
+          </div>
+          <div class="card" id="advTargetedCard" style="display: none;">
+            <h3>靶向对抗图片</h3>
+            <img id="advTargetedImg" alt="靶向对抗图片预览" />
           </div>
           <div class="card">
             <h3>掩膜 (Mask)</h3>
@@ -80,7 +107,8 @@
           <div><strong>最小扰动值 ε：</strong> <span id="epsilonText">—</span></div>
           <div><strong>预测前：</strong> <span id="predBefore">—</span></div>
           <div><strong>预测后：</strong> <span id="predAfter">—</span></div>
-          <div><strong>I-FGSM 预测后：</strong> <span id="predAfterIfgsm">—</span></div>
+          <div id="predAfterIfgsmRow" style="display:none;"><strong>I-FGSM 预测后：</strong> <span id="predAfterIfgsm">—</span></div>
+          <div id="predAfterTargetedRow" style="display:none;"><strong>靶向预测后：</strong> <span id="predAfterTargeted">—</span></div>
         </div>
       </section>
 
@@ -89,8 +117,8 @@
         <div id="compareControl" class="field" style="display: none;">
           <label>选择显示的对抗样本详情：</label>
           <div class="epsilon-row">
-            <label><input type="radio" name="compareMode" value="fgsm" checked> FGSM</label>
-            <label><input type="radio" name="compareMode" value="ifgsm"> I-FGSM</label>
+            <label><input type="radio" name="compareMode" value="mode1" checked> <span id="mode1Label">FGSM</span></label>
+            <label><input type="radio" name="compareMode" value="mode2"> <span id="mode2Label">I-FGSM</span></label>
           </div>
         </div>
         <div class="cards">

@@ -103,6 +103,76 @@ def fgsm_attack(image: torch.Tensor, epsilon: float, data_grad: torch.Tensor) ->
     perturbed_image = torch.clamp(perturbed_image, 0, 1)
     return perturbed_image, mask
 
+def fgsm_targeted_attack(image: torch.Tensor, epsilon: float, data_grad: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """靶向FGSM攻击：沿着梯度反方向扰动图像以最小化目标类别的Loss
+    
+    返回:
+    - perturbed_image: 对抗样本
+    - mask: 使用的背景掩膜
+    """
+    sign_data_grad = data_grad.sign()
+    
+    # 生成掩膜：仅保留非背景像素（假设背景为纯黑0）
+    mask = (image > 0.01).float()
+    
+    # 应用掩膜：仅在前景区域施加扰动
+    # 靶向攻击：朝着梯度反方向移动 (Minimize Loss of Target Class) -> x - epsilon * sign(grad)
+    masked_perturbation = epsilon * sign_data_grad * mask
+    
+    perturbed_image = image - masked_perturbation
+    perturbed_image = torch.clamp(perturbed_image, 0, 1)
+    return perturbed_image, mask
+
+def iterative_targeted_fgsm_attack(
+    image: torch.Tensor,
+    epsilon: float,
+    iters: int,
+    alpha: Optional[float],
+    target_label: int,
+    model: nn.Module,
+    device: torch.device,
+    use_mask: bool = True,
+    random_start: bool = False,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """靶向I-FGSM/PGD迭代式攻击：使预测结果逼近 target_label"""
+    x0 = image.to(device)
+    mask = (x0 > 0.01).float() if use_mask else torch.ones_like(x0)
+    x_adv = x0.clone().detach()
+    
+    if random_start:
+        rand = torch.empty_like(x_adv).uniform_(-epsilon, epsilon)
+        x_adv = torch.clamp(x0 + rand, 0, 1)
+        
+    if alpha is None:
+        alpha = epsilon / max(iters, 1)
+        
+    target = torch.tensor([target_label], dtype=torch.long, device=device)
+    
+    for _ in range(iters):
+        x_adv = x_adv.detach()
+        x_adv.requires_grad = True
+        logits = model(x_adv)
+        
+        # 靶向：最小化目标类别的 Loss
+        loss = F.cross_entropy(logits, target)
+        
+        model.zero_grad()
+        loss.backward()
+        grad = x_adv.grad.detach()
+        step = grad.sign()
+        
+        if use_mask:
+            step = step * mask
+            
+        # 靶向攻击：梯度下降 (x - alpha * sign(grad))
+        x_adv = x_adv.detach() - alpha * step
+        
+        # 投影回 L∞ 球并裁剪到[0,1]
+        delta = torch.clamp(x_adv - x0, -epsilon, epsilon)
+        x_adv = torch.clamp(x0 + delta, 0, 1)
+        
+    return x_adv.detach(), mask
+
 def iterative_fgsm_attack(
     image: torch.Tensor,
     epsilon: float,
@@ -169,6 +239,89 @@ def attack_one(model: nn.Module, image: torch.Tensor, label_id: Optional[int], e
     logits_adv = model(adv_image)
     pred_after = logits_adv.argmax(dim=1).item()
     success = (pred_after != pred_before) if label_id is None else (pred_after != label_id)
+
+    return {
+        "pred_before": pred_before,
+        "pred_after": pred_after,
+        "success": success,
+        "adv_image": adv_image.detach().cpu(),
+        "mask": mask.detach().cpu()
+    }
+
+
+def attack_one_targeted(
+    model: nn.Module,
+    image: torch.Tensor,
+    target_label: int,
+    epsilon: float,
+    device: torch.device
+) -> Dict:
+    """对单张图片执行靶向攻击并返回前后预测、是否成功与对抗样本"""
+    image = image.to(device)
+    image.requires_grad = True
+
+    logits = model(image)
+    pred_before = logits.argmax(dim=1).item()
+
+    # 靶向攻击：目标是 target_label
+    target = torch.tensor([target_label], dtype=torch.long, device=device)
+
+    loss = F.cross_entropy(logits, target)
+    model.zero_grad()
+    loss.backward()
+    data_grad = image.grad.data
+
+    # 使用靶向 FGSM
+    adv_image, mask = fgsm_targeted_attack(image, epsilon, data_grad)
+    
+    logits_adv = model(adv_image)
+    pred_after = logits_adv.argmax(dim=1).item()
+    
+    # 靶向攻击成功条件：最终预测类别 == 目标类别
+    success = (pred_after == target_label)
+
+    return {
+        "pred_before": pred_before,
+        "pred_after": pred_after,
+        "success": success,
+        "adv_image": adv_image.detach().cpu(),
+        "mask": mask.detach().cpu()
+    }
+
+
+def attack_one_iter_targeted(
+    model: nn.Module,
+    image: torch.Tensor,
+    target_label: int,
+    epsilon: float,
+    iters: int,
+    alpha: Optional[float],
+    device: torch.device,
+    use_mask: bool = True,
+    random_start: bool = False,
+) -> Dict:
+    """靶向迭代式攻击封装"""
+    image = image.to(device)
+    logits = model(image)
+    pred_before = logits.argmax(dim=1).item()
+    
+    adv_image, mask = iterative_targeted_fgsm_attack(
+        image=image,
+        epsilon=epsilon,
+        iters=iters,
+        alpha=alpha,
+        target_label=target_label,
+        model=model,
+        device=device,
+        use_mask=use_mask,
+        random_start=random_start,
+    )
+    
+    logits_adv = model(adv_image)
+    pred_after = logits_adv.argmax(dim=1).item()
+    
+    # 靶向攻击成功条件：最终预测类别 == 目标类别
+    success = (pred_after == target_label)
 
     return {
         "pred_before": pred_before,
