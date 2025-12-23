@@ -15,6 +15,8 @@ Thumbs.db
 # Data and Models (Large files)
 data/
 saved/
+test/
+pictures/
 *.pth
 *.pt
 *.zip
