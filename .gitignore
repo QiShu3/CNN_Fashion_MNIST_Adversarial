@@ -1,5 +1,38 @@
-*.png
-*.pyc
+# Byte-compiled / optimized / DLL files
 __pycache__/
-*.png
+*.py[cod]
+*$py.class
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Data and Models (Large files)
+data/
+saved/
 *.pth
+*.pt
+*.zip
+*.gz
+fashion-mnist-master/results10epoch/
+fashion-mnist-master/results50epoch/
+fashion-mnist-master/data/
+
+# Environments
+.venv/
+venv/
+ENV/
+env/
+
+# IDEs
+.vscode/
+.idea/
+.trae/
+
+# Logs
+*.log

@@ -1,0 +1,37 @@
+model:
+  name: ResNet
+  type: ResNet
+  num_classes: 10
+  input_size: [1, 28, 28]
+  num_blocks: [2, 2, 2, 2]
+  description: "ResNet网络，适用于Fashion-MNIST"
+
+training:
+  num_epochs: 10        
+  batch_size: 64
+  initial_learning_rate: 0.001
+  optimizer: Adam
+ 
+  learning_rate_schedule:
+    type: constant    
+    description: "10个epoch内学习率保持0.001不变，避免lr降为0"
+
+  weight_decay: 1e-4   
+  dropout_rate: 0.15    
+  
+  loss_function: CrossEntropyLoss
+  device: cuda
+  
+dataset:
+  name: Fashion-MNIST
+  path: ./data/fashion
+  train_size: 60000
+  test_size: 10000
+  num_classes: 10
+
+output:
+  model_file: results/ResNet.pt
+  metrics_file: results/ResNet_metrics.txt
+  config_file: results/ResNet_config.yaml
+  confusion_matrix: results/ResNet_confusion_matrix.png
+

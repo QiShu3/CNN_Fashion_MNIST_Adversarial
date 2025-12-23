@@ -1,59 +1,75 @@
 import os
-import argparse
 import csv
 from typing import List, Tuple, Optional, Dict
+from tqdm import tqdm
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), 'fashion-mnist-master'))
+from models import SimpleCNN, ResNet, CNNWithBatchNorm, DeepCNN
+
 from PIL import Image
 import torchvision.transforms as transforms
+from torchvision import datasets
 from torchvision.utils import save_image
-
-
-class Network(nn.Module):
-    """与训练一致的CNN结构，用于加载/推理与攻击"""
-    def __init__(self):
-        super(Network, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels=1, out_channels=6, kernel_size=5)
-        self.conv2 = nn.Conv2d(in_channels=6, out_channels=12, kernel_size=5)
-        self.fc1 = nn.Linear(in_features=12*4*4, out_features=120)
-        self.fc2 = nn.Linear(in_features=120, out_features=60)
-        self.out = nn.Linear(in_features=60, out_features=10)
-
-    def forward(self, t):
-        """前向传播：返回未归一化的类别logits"""
-        t = F.relu(self.conv1(t))
-        t = F.max_pool2d(t, kernel_size=2, stride=2)
-        t = F.relu(self.conv2(t))
-        t = F.max_pool2d(t, kernel_size=2, stride=2)
-        t = F.relu(self.fc1(t.reshape(-1, 12*4*4)))
-        t = F.relu(self.fc2(t))
-        t = self.out(t)
-        return t
-
 
 FASHION_MNIST_LABELS = [
     "T-shirt/top", "Trouser", "Pullover", "Dress", "Coat",
     "Sandal", "Shirt", "Sneaker", "Bag", "Ankle boot"
 ]
 LABEL_NAME_TO_ID = {name: idx for idx, name in enumerate(FASHION_MNIST_LABELS)}
+LABEL_NAME_TO_ID["T-shirt"] = LABEL_NAME_TO_ID["T-shirt/top"]  # Handle folder name mismatch
 
 
-def load_model(model_path: str, device: torch.device) -> nn.Module:
-    """加载训练好的模型；优先整模型加载，失败则回退state_dict"""
+def load_model(model_path: str, model_name: str, device: torch.device) -> nn.Module:
+    """加载训练好的模型；根据模型名称初始化对应结构"""
+    # 实例化模型
+    if model_name == "ResNet":
+        model = ResNet()
+    elif model_name == "SimpleCNN":
+        model = SimpleCNN()
+    elif model_name == "CNNWithBatchNorm":
+        model = CNNWithBatchNorm()
+    elif model_name == "DeepCNN":
+        model = DeepCNN()
+    else:
+        # 默认回退逻辑，或者抛错
+        print(f"Unknown model name {model_name}, trying to auto-detect not supported well. Defaulting to SimpleCNN.")
+        model = SimpleCNN()
+
+    model = model.to(device)
+    
+    # 加载权重
     try:
-        model = torch.load(model_path, weights_only=False, map_location=device)
-        model.eval()
-        return model
-    except Exception:
-        state = torch.load(model_path, weights_only=True, map_location=device)
-        model = Network().to(device)
-        model.load_state_dict(state)
-        model.eval()
-        return model
+        # 尝试直接加载整模型（如果保存的是整模型）
+        loaded_obj = torch.load(model_path, map_location=device)
+        if isinstance(loaded_obj, dict):
+            # 是 state_dict
+            state = loaded_obj
+        elif isinstance(loaded_obj, nn.Module):
+            # 是整模型，直接返回（这种情况下上面的实例化可能浪费了，但兼容性更好）
+            print(f"Loaded full model object for {model_name}")
+            loaded_obj.eval()
+            return loaded_obj
+        else:
+            raise ValueError(f"Unknown loaded object type: {type(loaded_obj)}")
+            
+        # 加载 state_dict
+        try:
+            model.load_state_dict(state)
+        except RuntimeError as e:
+            print(f"Strict loading failed: {e}. Trying strict=False...")
+            model.load_state_dict(state, strict=False)
+            
+    except Exception as e:
+        print(f"Error loading model from {model_path}: {e}")
+        raise e
 
+    model.eval()
+    return model
 
 def load_images(root: str) -> List[Tuple[str, torch.Tensor, Optional[int], Optional[str]]]:
     """递归加载PNG图片为张量；返回 (路径, 张量, 标签id或None, 标签名或None)"""
@@ -61,8 +77,10 @@ def load_images(root: str) -> List[Tuple[str, torch.Tensor, Optional[int], Optio
         transforms.Grayscale(num_output_channels=1),
         transforms.Resize((28, 28)),
         transforms.ToTensor(),  # [0,1], shape [1,28,28]
+        transforms.Normalize((0.5,), (0.5,)),  # [-1, 1] matching training
     ])
     results: List[Tuple[str, torch.Tensor, Optional[int], Optional[str]]] = []
+    print(f"Scanning images in {root}...")
     for dirpath, _, filenames in os.walk(root):
         # 通过上级目录名识别类别
         parts = dirpath.replace("\\", "/").split("/")
@@ -80,8 +98,8 @@ def load_images(root: str) -> List[Tuple[str, torch.Tensor, Optional[int], Optio
             img = Image.open(fp).convert("L")
             tensor = tfm(img).unsqueeze(0)  # [1,1,28,28]
             results.append((fp, tensor, label_id, label_name))
+    print(f"Found {len(results)} images.")
     return results
-
 
 def fgsm_attack(image: torch.Tensor, epsilon: float, data_grad: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     """FGSM攻击：按梯度符号扰动图像，并使用掩膜过滤背景噪点
@@ -248,7 +266,6 @@ def attack_one(model: nn.Module, image: torch.Tensor, label_id: Optional[int], e
         "mask": mask.detach().cpu()
     }
 
-
 def attack_one_targeted(
     model: nn.Module,
     image: torch.Tensor,
@@ -374,20 +391,31 @@ def ensure_dir(path: str):
     os.makedirs(path, exist_ok=True)
 
 
-def calculate_and_print_metrics(results: List[Dict], total_l2: float):
+def cleanup_results(root_dir: str):
+    """清理目录下的 png 和 csv 文件，保留子目录结构"""
+    if not os.path.exists(root_dir):
+        return
+    print(f"Cleaning up old results in {root_dir}...")
+    for dirpath, _, filenames in os.walk(root_dir):
+        for fn in filenames:
+            if fn.lower().endswith((".png", ".csv")):
+                try:
+                    os.remove(os.path.join(dirpath, fn))
+                except Exception as e:
+                    print(f"Failed to delete {fn}: {e}")
+
+
+def calculate_and_print_metrics(model_name: str, attack_type: str, results: List[Dict], total_l2: float):
     """统计并打印攻击指标：Clean Acc, Adv Acc, ASR, Avg L2"""
     total = len(results)
     if total == 0:
-        print("未处理任何图片。")
+        print(f"[{model_name} | {attack_type}] 未处理任何图片。")
         return
 
     # 统计各项指标
     clean_correct = sum(1 for r in results if r["clean_correct"])
     adv_correct = sum(1 for r in results if r["adv_correct"])
     
-    # ASR (Attack Success Rate): 
-    # 通常定义为：在原始分类正确的样本中，攻击成功（导致分类错误或目标攻击成功）的比例
-    # 这里我们简单定义为：Clean Correct 且 Adv Incorrect 的样本数
     success_on_clean = sum(1 for r in results if r["clean_correct"] and not r["adv_correct"])
     
     clean_acc = clean_correct / total * 100
@@ -396,93 +424,138 @@ def calculate_and_print_metrics(results: List[Dict], total_l2: float):
     
     avg_l2 = total_l2 / total
 
-    print("\n" + "="*45)
-    print(f"  攻击结果统计 (Total Images: {total})")
-    print("="*45)
+    print("\n" + "="*55)
+    print(f"  结果统计: {model_name} | {attack_type}")
+    print("="*55)
     print(f"  Clean Accuracy       : {clean_acc:6.2f}% ({clean_correct}/{total})")
     print(f"  Adversarial Accuracy : {adv_acc:6.2f}% ({adv_correct}/{total})")
-    print(f"  Attack Success Rate  : {asr:6.2f}% (Base: {clean_correct} clean correct)")
+    print(f"  Attack Success Rate  : {asr:6.2f}% (Base: {clean_correct} correct)")
     print(f"  Avg L2 Perturbation  : {avg_l2:.4f}")
-    print("="*45 + "\n")
+    print("="*55 + "\n")
 
 
 def main():
-    """参数解析、批量攻击与结果保存"""
-    parser = argparse.ArgumentParser(description="快速对图片执行FGSM攻击并对比预测")
-    parser.add_argument("--images", required=True, help="图片根目录")
-    parser.add_argument("--model", required=True, help="训练后模型路径 .pth")
-    parser.add_argument("--epsilon", type=float, default=0.15, help="FGSM攻击强度")
-    parser.add_argument("--out", default="saved/adversarial", help="输出目录")
-    args = parser.parse_args()
+    """批量攻击与结果评估（支持多种攻击方法对比）"""
+    # 自动扫描 results50epoch 目录下的模型
+    base_results_dir = "/Users/qishu/Desktop/一次性/研一上/矩阵理论汇报/CNN_pytorch_adversarial_attack_Fashion_MNIST/fashion-mnist-master/results50epoch"
+    models_to_evaluate = []
+    
+    if os.path.exists(base_results_dir):
+        for model_name in os.listdir(base_results_dir):
+            model_dir = os.path.join(base_results_dir, model_name)
+            if os.path.isdir(model_dir):
+                pt_file = os.path.join(model_dir, f"{model_name}.pt")
+                if os.path.exists(pt_file):
+                    models_to_evaluate.append({"name": model_name, "path": pt_file})
+    
+    if not models_to_evaluate:
+        print(f"Warning: No models found in {base_results_dir}. Using default list.")
+        models_to_evaluate = [
+            {"name": "SimpleCNN", "path": "fashion-mnist-master/results50epoch/SimpleCNN/SimpleCNN.pt"},
+            {"name": "ResNet", "path": "fashion-mnist-master/results50epoch/ResNet/ResNet.pt"}
+        ]
 
-    device = torch.device("cpu")
-    model = load_model(args.model, device)
+    # 攻击配置
+    epsilon = 0.15
+    attack_methods = [
+        {"type": "FGSM", "params": {}},
+        {"type": "I-FGSM", "params": {"iters": 10, "alpha": 0.01}}
+    ]
+    
+    out_dir = "saved/adversarial"
+    ensure_dir(out_dir)
+    cleanup_results(out_dir)
+    
+    device = torch.device("cpu") # 改为 cpu 保证兼容性，可按需改为 cuda/mps
+    
+    test_data_path = "/Users/qishu/Desktop/一次性/研一上/矩阵理论汇报/CNN_pytorch_adversarial_attack_Fashion_MNIST/test/Fashion-MNIST"
+    images = load_images(root=test_data_path)
 
-    images = load_images(args.images)
-    ensure_dir(args.out)
+    for model_info in models_to_evaluate:
+        model_name = model_info["name"]
+        model_path = model_info["path"]
+        
+        try:
+            model = load_model(model_path, model_name, device)
+        except Exception as e:
+            print(f"Failed to load model {model_name}: {e}")
+            continue
 
-    # 统计变量
-    results_stats = []
-    total_l2 = 0.0
-
-    csv_path = os.path.join(args.out, "attack_results.csv")
-    with open(csv_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=[
-            "image_path", "label_name", "label_id",
-            "pred_before_id", "pred_before_name",
-            "pred_after_id", "pred_after_name",
-            "success", "epsilon", "adv_image_path"
-        ])
-        writer.writeheader()
-
-        for fp, tensor, label_id, label_name in images:
-            res = attack_one(model, tensor, label_id, args.epsilon, device)
-            pred_before_id = res["pred_before"]
-            pred_after_id = res["pred_after"]
-            pred_before_name = FASHION_MNIST_LABELS[pred_before_id]
-            pred_after_name = FASHION_MNIST_LABELS[pred_after_id]
-            success = res["success"]
-
-            # 统计数据收集
-            is_clean_correct = False
-            is_adv_correct = False
-            if label_id is not None:
-                if pred_before_id == label_id:
-                    is_clean_correct = True
-                if pred_after_id == label_id:
-                    is_adv_correct = True
+        for attack in attack_methods:
+            attack_type = attack["type"]
+            params = attack["params"]
             
-            # 计算 L2 距离
-            l2_dist = torch.norm(res["adv_image"] - tensor).item()
-            total_l2 += l2_dist
-
-            results_stats.append({
-                "clean_correct": is_clean_correct,
-                "adv_correct": is_adv_correct
-            })
-
-            base = os.path.splitext(os.path.basename(fp))[0]
-            adv_fp = os.path.join(args.out, f"{base}_adv_e{args.epsilon:.2f}.png")
-            save_image(res["adv_image"], adv_fp)
-
-            print(f"[{os.path.basename(fp)}] before={pred_before_name} -> after={pred_after_name} "
-                  f"({'SUCCESS' if success else 'FAIL'}) epsilon={args.epsilon}")
-
-            writer.writerow({
-                "image_path": fp,
-                "label_name": label_name,
-                "label_id": label_id if label_id is not None else "",
-                "pred_before_id": pred_before_id,
-                "pred_before_name": pred_before_name,
-                "pred_after_id": pred_after_id,
-                "pred_after_name": pred_after_name,
-                "success": success,
-                "epsilon": args.epsilon,
-                "adv_image_path": adv_fp
-            })
+            print(f"\n>>> Running {attack_type} attack on {model_name}...")
             
-    # 打印最终统计结果
-    calculate_and_print_metrics(results_stats, total_l2)
+            # 统计变量
+            results_stats = []
+            total_l2 = 0.0
+            
+            # 不同方法保存在不同文件夹下: saved/adversarial/FGSM/SimpleCNN/
+            # 在下面会按类别进一步分子目录
+            method_base_dir = os.path.join(out_dir, attack_type, model_name)
+            ensure_dir(method_base_dir)
+
+            csv_path = os.path.join(out_dir, f"attack_results_{model_name}_{attack_type}.csv")
+            
+            with open(csv_path, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=[
+                    "image_path", "label_name", "label_id",
+                    "pred_before_id", "pred_before_name",
+                    "pred_after_id", "pred_after_name",
+                    "success", "epsilon", "attack_type", "adv_image_path"
+                ])
+                writer.writeheader()
+
+                for fp, tensor, label_id, label_name in tqdm(images, desc=f"{attack_type}"):
+                    if attack_type == "I-FGSM":
+                        res = attack_one_iter(model, tensor, label_id, epsilon, 
+                                             params["iters"], params["alpha"], device)
+                    else:
+                        res = attack_one(model, tensor, label_id, epsilon, device)
+                    
+                    pred_before_id = res["pred_before"]
+                    pred_after_id = res["pred_after"]
+                    pred_before_name = FASHION_MNIST_LABELS[pred_before_id]
+                    pred_after_name = FASHION_MNIST_LABELS[pred_after_id]
+                    success = res["success"]
+
+                    # 统计
+                    is_clean_correct = (pred_before_id == label_id) if label_id is not None else False
+                    is_adv_correct = (pred_after_id == label_id) if label_id is not None else False
+                    
+                    l2_dist = torch.norm(res["adv_image"] - tensor).item()
+                    total_l2 += l2_dist
+
+                    results_stats.append({
+                        "clean_correct": is_clean_correct,
+                        "adv_correct": is_adv_correct
+                    })
+
+                    # 保存图片：按类别分文件夹，并使用 [ModelName]_[ImageID]_adv.png 格式
+                    category_dir = os.path.join(method_base_dir, label_name if label_name else "Unknown")
+                    ensure_dir(category_dir)
+                    
+                    base = os.path.splitext(os.path.basename(fp))[0]
+                    adv_filename = f"{model_name}_{base}_adv.png"
+                    adv_fp = os.path.join(category_dir, adv_filename)
+                    save_image(res["adv_image"], adv_fp)
+
+                    writer.writerow({
+                        "image_path": fp,
+                        "label_name": label_name,
+                        "label_id": label_id if label_id is not None else "",
+                        "pred_before_id": pred_before_id,
+                        "pred_before_name": pred_before_name,
+                        "pred_after_id": pred_after_id,
+                        "pred_after_name": pred_after_name,
+                        "success": success,
+                        "epsilon": epsilon,
+                        "attack_type": attack_type,
+                        "adv_image_path": adv_fp
+                    })
+                    
+            calculate_and_print_metrics(model_name, attack_type, results_stats, total_l2)
 
 
 if __name__ == "__main__":
